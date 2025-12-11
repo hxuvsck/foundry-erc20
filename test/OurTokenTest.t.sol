@@ -25,4 +25,21 @@ contract OurTokenTest is Test {
     function testBobBalance() public {
         assertEq(STARTING_BALANCE, ourToken.balanceOf(bob));
     }
+
+    function testAllowanceWorks() public {
+        // transferFrom from ERC20 standard to make sure your allowances to work well.
+        uint256 initialAllowance = 1000;
+        // Bob approves Alice to spend tokens on her behalf
+        vm.prank(bob);
+        ourToken.approve(alice, initialAllowance);
+        // it also interacts with OpenZeppelin's ERC20 contract within allowance function and transferFrom functions
+
+        uint256 transferAmount = 500;
+
+        vm.prank(alice);
+        ourToken.transferFrom(bob, alice, transferAmount);
+        // transferFrom's difference from transfer: you can set anybody "from" but only go through if they are approved(allowance).
+        assertEq(ourToken.balanceOf(alice), transferAmount);
+        assertEq(ourToken.balanceOf(bob), STARTING_BALANCE - transferAmount);
+    }
 }
