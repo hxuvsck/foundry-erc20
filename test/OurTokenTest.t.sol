@@ -1,45 +1,174 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.19;
 
-import {Test} from "forge-std/Test.sol";
 import {DeployOurToken} from "../script/DeployOurToken.s.sol";
 import {OurToken} from "../src/OurToken.sol";
+import {Test, console} from "forge-std/Test.sol";
+import {StdCheats} from "forge-std/StdCheats.sol";
 
-contract OurTokenTest is Test {
+interface MintableToken {
+    function mint(address, uint256) external;
+}
+
+contract OurTokenTest is StdCheats, Test {
     OurToken public ourToken;
     DeployOurToken public deployer;
 
-    address bob = makeAddr("bob");
-    address alice = makeAddr("alice");
-
-    uint256 public constant STARTING_BALANCE = 100 ether;
+    address alice = address(1);
+    address bob = address(2);
+    address carol = address(3);
 
     function setUp() public {
         deployer = new DeployOurToken();
         ourToken = deployer.run();
+    }
+
+    // --------------------------------------------------------
+    // INITIALIZATION TESTS
+    // --------------------------------------------------------
+
+    function testInitialSupply() public {
+        assertEq(ourToken.totalSupply(), deployer.INITIAL_SUPPLY());
+        assertEq(ourToken.balanceOf(msg.sender), deployer.INITIAL_SUPPLY());
+    }
+
+    function testUsersCantMint() public {
+        vm.expectRevert(); // mint() isn't exposed in ERC20
+        MintableToken(address(ourToken)).mint(address(this), 1);
+    }
+
+    // --------------------------------------------------------
+    // TRANSFER TESTS
+    // --------------------------------------------------------
+
+    function testTransfer() public {
+        uint256 amount = 100;
 
         vm.prank(msg.sender);
-        ourToken.transfer(bob, STARTING_BALANCE);
+        ourToken.transfer(alice, amount);
+
+        assertEq(ourToken.balanceOf(alice), amount);
+        assertEq(
+            ourToken.balanceOf(msg.sender),
+            deployer.INITIAL_SUPPLY() - amount
+        );
     }
 
-    function testBobBalance() public {
-        assertEq(STARTING_BALANCE, ourToken.balanceOf(bob));
+    function testTransferFailsIfInsufficientBalance() public {
+        vm.prank(alice);
+        vm.expectRevert(); // OZ ERC20 reverts if insufficient balance
+        ourToken.transfer(bob, 1);
     }
 
-    function testAllowanceWorks() public {
-        // transferFrom from ERC20 standard to make sure your allowances to work well.
-        uint256 initialAllowance = 1000;
-        // Bob approves Alice to spend tokens on her behalf
-        vm.prank(bob);
-        ourToken.approve(alice, initialAllowance);
-        // it also interacts with OpenZeppelin's ERC20 contract within allowance function and transferFrom functions
+    function testTransferEmitsEvent() public {
+        uint256 amount = 123;
 
-        uint256 transferAmount = 500;
+        vm.prank(msg.sender);
+        vm.expectEmit(true, true, false, true);
+        emit Transfer(msg.sender, alice, amount);
+
+        ourToken.transfer(alice, amount);
+    }
+
+    // --------------------------------------------------------
+    // ALLOWANCE TESTS
+    // --------------------------------------------------------
+
+    function testApproveAllowance() public {
+        uint256 amount = 500;
+
+        vm.prank(msg.sender);
+        ourToken.approve(alice, amount);
+
+        assertEq(ourToken.allowance(msg.sender, alice), amount);
+    }
+
+    // function testIncreaseAndDecreaseAllowance() public {
+    //     vm.startPrank(msg.sender);
+    //     ourToken.increaseAllowance(alice, 200);
+    //     assertEq(ourToken.allowance(msg.sender, alice), 200);
+
+    //     ourToken.decreaseAllowance(alice, 50);
+    //     assertEq(ourToken.allowance(msg.sender, alice), 150);
+    //     vm.stopPrank();
+    // }
+
+    function testApproveEmitsEvent() public {
+        vm.prank(msg.sender);
+        vm.expectEmit(true, true, false, true);
+        emit Approval(msg.sender, alice, 777);
+
+        ourToken.approve(alice, 777);
+    }
+
+    // --------------------------------------------------------
+    // TRANSFER FROM TESTS
+    // --------------------------------------------------------
+
+    function testTransferFromWorksWhenApproved() public {
+        uint256 amount = 200;
+
+        // msg.sender approves Alice
+        vm.prank(msg.sender);
+        ourToken.approve(alice, amount);
+
+        // Alice transfers from msg.sender to Bob
+        vm.prank(alice);
+        ourToken.transferFrom(msg.sender, bob, amount);
+
+        assertEq(ourToken.balanceOf(bob), amount);
+        assertEq(
+            ourToken.balanceOf(msg.sender),
+            deployer.INITIAL_SUPPLY() - amount
+        );
+    }
+
+    function testTransferFromFailsWithoutEnoughAllowance() public {
+        uint256 amount = 100;
 
         vm.prank(alice);
-        ourToken.transferFrom(bob, alice, transferAmount);
-        // transferFrom's difference from transfer: you can set anybody "from" but only go through if they are approved(allowance).
-        assertEq(ourToken.balanceOf(alice), transferAmount);
-        assertEq(ourToken.balanceOf(bob), STARTING_BALANCE - transferAmount);
+        vm.expectRevert(); // insufficient allowance
+        ourToken.transferFrom(msg.sender, bob, amount);
     }
+
+    function testAllowanceReducesAfterTransferFrom() public {
+        uint256 amount = 250;
+
+        vm.prank(msg.sender);
+        ourToken.approve(alice, amount);
+
+        vm.prank(alice);
+        ourToken.transferFrom(msg.sender, bob, 100);
+
+        assertEq(ourToken.allowance(msg.sender, alice), 150);
+    }
+
+    // --------------------------------------------------------
+    // BASIC INVARIANTS
+    // --------------------------------------------------------
+
+    function testTotalSupplyConstant() public {
+        // No mint/burn functions exist
+        uint256 before = ourToken.totalSupply();
+
+        vm.prank(msg.sender);
+        ourToken.transfer(alice, 10);
+
+        assertEq(ourToken.totalSupply(), before);
+    }
+
+    function testNoOneHasBalanceOutOfThinAir() public {
+        assertEq(ourToken.balanceOf(bob), 0);
+        assertEq(ourToken.balanceOf(carol), 0);
+    }
+
+    // --------------------------------------------------------
+    // EVENTS (needed for expectEmit)
+    // --------------------------------------------------------
+    event Transfer(address indexed from, address indexed to, uint256 value);
+    event Approval(
+        address indexed owner,
+        address indexed spender,
+        uint256 value
+    );
 }
